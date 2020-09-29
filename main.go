@@ -51,7 +51,7 @@ type fanout struct {
 	stpd chan struct{}
 
 	mu      sync.Mutex
-	clients map[int]*net.TCPConn
+	clients map[int]chan []byte
 }
 
 func newFanout(addr string, retries int, idle time.Duration) *fanout {
@@ -61,7 +61,7 @@ func newFanout(addr string, retries int, idle time.Duration) *fanout {
 		idle:    idle,
 		stp:     make(chan struct{}),
 		stpd:    make(chan struct{}),
-		clients: make(map[int]*net.TCPConn),
+		clients: make(map[int]chan []byte),
 	}
 }
 
@@ -75,14 +75,19 @@ func (fnt *fanout) start() <-chan error {
 				errch <- fmt.Errorf("connect: %v", err)
 				return
 			}
-			buf := make([]byte, 1024)
-			for {
+			bufs := make([][]byte, 2)
+			for i := range bufs {
+				bufs[i] = make([]byte, 1024)
+			}
+			for i := 0; ; i %= len(bufs) {
+				buf := bufs[i]
 				n, err := conn.Read(buf)
-				fnt.write(buf[:n])
+				fnt.pub(buf[:n])
 				if err != nil {
-					errch <- fmt.Errorf("read: %v", err)
-					return
+					log.Printf("read: %v", err)
+					break
 				}
+				i++
 			}
 		}
 	}()
@@ -96,22 +101,6 @@ func (fnt *fanout) stop() {
 		close(fnt.stp)
 		<-fnt.stpd
 	}
-}
-
-func (fnt *fanout) write(buf []byte) error {
-	fnt.mu.Lock()
-	defer fnt.mu.Unlock()
-	for _, c := range fnt.clients {
-		cbuf := buf[:]
-		for len(cbuf) > 0 {
-			n, err := c.Write(buf)
-			if err != nil {
-				return fmt.Errorf("write %s->%s: %v", c.LocalAddr(), c.RemoteAddr(), err)
-			}
-			cbuf = cbuf[n:]
-		}
-	}
-	return nil
 }
 
 func (fnt *fanout) connect() (*net.TCPConn, error) {
@@ -138,13 +127,23 @@ func (fnt *fanout) connect() (*net.TCPConn, error) {
 	return nil, fmt.Errorf("stopped after %d retries: %v", connectRetries, lastErr)
 }
 
-func (fnt *fanout) attach(id int, conn *net.TCPConn) {
+func (fnt *fanout) pub(buf []byte) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	fnt.clients[id] = conn
+	for _, stream := range fnt.clients {
+		stream <- buf
+	}
 }
 
-func (fnt *fanout) detach(id int) {
+func (fnt *fanout) sub(id int) <-chan []byte {
+	fnt.mu.Lock()
+	defer fnt.mu.Unlock()
+	stream := make(chan []byte)
+	fnt.clients[id] = stream
+	return stream
+}
+
+func (fnt *fanout) unsub(id int) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
 	delete(fnt.clients, id)
@@ -231,7 +230,35 @@ func (srv *server) accept(lsn net.Listener) (<-chan *net.TCPConn, <-chan error) 
 }
 
 func (srv *server) handle(id int, conn *net.TCPConn) {
-	srv.fnt.attach(id, conn)
+	defer func() {
+		err := conn.Close()
+		if err != nil {
+			log.Printf("warn, disconnected %v->%v: %v", conn.LocalAddr(), conn.RemoteAddr(), err)
+		} else {
+			log.Printf("info, disconnected %v->%v", conn.LocalAddr(), conn.RemoteAddr())
+		}
+	}()
+
+	stream := srv.fnt.sub(id)
+	defer srv.fnt.unsub(id)
+
+	for {
+		var buf []byte
+		select {
+		case <-srv.stp:
+			return
+		case chunk := <-stream:
+			buf = append(buf, chunk...)
+		}
+		for len(buf) > 0 {
+			n, err := conn.Write(buf)
+			if err != nil {
+				log.Printf("error, write: %v", err)
+				return
+			}
+			buf = buf[n:]
+		}
+	}
 }
 
 const (
