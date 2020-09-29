@@ -5,24 +5,25 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"sync"
 	"syscall"
+	"time"
 )
 
 func main() {
 	flag.Parse()
 	if err := run(); err != nil {
-		fmt.Printf("error: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("fatal, %v", err)
 	}
 }
 
 var connectAddr = flag.String("connect", "", "address to connect to")
+var connectRetries = flag.Int("retries", 8, "how many times to retry to connect")
+var connectIdle = flag.Duration("interval", time.Second, "interval between connect retries")
 var listenAddr = flag.String("listen", "", "address to listen to")
 
 func run() error {
-	fnt := newFanout(*connectAddr)
+	fnt := newFanout(*connectAddr, *connectRetries, *connectIdle)
 	ferr := fnt.start()
 	defer fnt.stop()
 
@@ -35,26 +36,32 @@ func run() error {
 
 	select {
 	case err = <-ferr:
-		return fmt.Errorf("fanout error: %v", err)
+		return fmt.Errorf("fanout: %v", err)
 	case err = <-serr:
-		return fmt.Errorf("server error: %v", err)
+		return fmt.Errorf("server: %v", err)
 	}
 }
 
 type fanout struct {
-	addr string
+	addr    string
+	retries int
+	idle    time.Duration
+
 	stp  chan struct{}
 	stpd chan struct{}
 
 	mu      sync.Mutex
-	clients []*net.TCPConn
+	clients map[int]*net.TCPConn
 }
 
-func newFanout(addr string) *fanout {
+func newFanout(addr string, retries int, idle time.Duration) *fanout {
 	return &fanout{
-		addr: addr,
-		stp:  make(chan struct{}),
-		stpd: make(chan struct{}),
+		addr:    addr,
+		retries: retries,
+		idle:    idle,
+		stp:     make(chan struct{}),
+		stpd:    make(chan struct{}),
+		clients: make(map[int]*net.TCPConn),
 	}
 }
 
@@ -62,26 +69,22 @@ func (fnt *fanout) start() <-chan error {
 	errch := make(chan error, 1)
 	go func() {
 		defer close(fnt.stpd)
-		conn, err := fnt.connect()
-		if err != nil {
-			errch <- fmt.Errorf("connect: %v", err)
-			return
-		}
 		for {
-			buf := make([]byte, 8)
-			n, err := conn.Read(buf)
-			log.Printf("err=%v, buf[:%d]=%v", err, n, buf[:n])
-			fnt.send(buf[:n])
+			conn, err := fnt.connect()
 			if err != nil {
-				errch <- fmt.Errorf("read: %v", err)
+				errch <- fmt.Errorf("connect: %v", err)
 				return
 			}
+			buf := make([]byte, 1024)
+			for {
+				n, err := conn.Read(buf)
+				fnt.write(buf[:n])
+				if err != nil {
+					errch <- fmt.Errorf("read: %v", err)
+					return
+				}
+			}
 		}
-		// 		err = conn.Control(func(fd uintptr) {
-		// 			n, ok, sc, err := Splice(1, int(fd), remain)
-		// 			log.Printf("splice: n=%d, ok=%v, sc=%s, err=%v", n, ok, sc, err)
-		// 		})
-		// 		errch <- err
 	}()
 	return errch
 }
@@ -95,7 +98,7 @@ func (fnt *fanout) stop() {
 	}
 }
 
-func (fnt *fanout) send(buf []byte) error {
+func (fnt *fanout) write(buf []byte) error {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
 	for _, c := range fnt.clients {
@@ -112,21 +115,39 @@ func (fnt *fanout) send(buf []byte) error {
 }
 
 func (fnt *fanout) connect() (*net.TCPConn, error) {
-	conn, err := net.Dial("tcp", fnt.addr)
-	if err != nil {
-		return nil, fmt.Errorf("net dial: %v", err)
+	var lastErr error
+	for i := 0; i < fnt.retries; i++ {
+		conn, err := net.Dial("tcp", fnt.addr)
+		if err != nil {
+			log.Printf("error, dial: %v", err)
+			lastErr = err
+			select {
+			case <-time.After(fnt.idle):
+				continue
+			case <-fnt.stp:
+				return nil, lastErr
+			}
+		}
+		tcpConn, ok := conn.(*net.TCPConn)
+		if !ok {
+			return nil, fmt.Errorf("cast to tcp conn: %v", conn)
+		}
+		log.Printf("info, connected %v->%v", tcpConn.LocalAddr(), tcpConn.RemoteAddr())
+		return tcpConn, nil
 	}
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok {
-		return nil, fmt.Errorf("cast to tcp conn: %v", conn)
-	}
-	return tcpConn, nil
+	return nil, fmt.Errorf("stopped after %d retries: %v", connectRetries, lastErr)
 }
 
-func (fnt *fanout) attach(conn *net.TCPConn) {
+func (fnt *fanout) attach(id int, conn *net.TCPConn) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	fnt.clients = append(fnt.clients, conn)
+	fnt.clients[id] = conn
+}
+
+func (fnt *fanout) detach(id int) {
+	fnt.mu.Lock()
+	defer fnt.mu.Unlock()
+	delete(fnt.clients, id)
 }
 
 type server struct {
@@ -170,16 +191,17 @@ func (srv *server) serve() error {
 	if err != nil {
 		return fmt.Errorf("listen: %v", err)
 	}
+	log.Printf("info, listening on %s", srv.addr)
 	defer lsn.Close()
 	conns, aerrs := srv.accept(lsn)
-	for {
+	for id := 0; ; id++ {
 		select {
 		case <-srv.stp:
 			return nil
 		case err := <-aerrs:
 			return fmt.Errorf("accept: %v", err)
 		case conn := <-conns:
-			go srv.handle(conn)
+			go srv.handle(id, conn)
 		}
 	}
 }
@@ -201,14 +223,15 @@ func (srv *server) accept(lsn net.Listener) (<-chan *net.TCPConn, <-chan error) 
 				errs <- fmt.Errorf("cast to tcp conn: %v", conn)
 				return
 			}
+			log.Printf("info, connected %v->%v", tcpConn.LocalAddr(), tcpConn.RemoteAddr())
 			conns <- tcpConn
 		}
 	}()
 	return conns, errs
 }
 
-func (srv *server) handle(conn *net.TCPConn) {
-	srv.fnt.attach(conn)
+func (srv *server) handle(id int, conn *net.TCPConn) {
+	srv.fnt.attach(id, conn)
 }
 
 const (
