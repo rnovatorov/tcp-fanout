@@ -17,8 +17,8 @@ type fanout struct {
 	stpd chan struct{}
 	ups  *upstream
 
-	mu      sync.Mutex
-	clients map[int]chan message
+	mu   sync.Mutex
+	subs map[int]subscription
 }
 
 func newFanout(addr string, retries int, idle time.Duration) *fanout {
@@ -28,7 +28,7 @@ func newFanout(addr string, retries int, idle time.Duration) *fanout {
 		idle:    idle,
 		stp:     make(chan struct{}),
 		stpd:    make(chan struct{}),
-		clients: make(map[int]chan message),
+		subs:    make(map[int]subscription),
 	}
 }
 
@@ -93,29 +93,30 @@ func (fnt *fanout) connect() (net.Conn, error) {
 	return nil, fmt.Errorf("stopped after %d retries: %v", fnt.retries, lastErr)
 }
 
-type message struct {
-	fd int
-	n  int
-}
-
 func (fnt *fanout) pub(msg message) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	for _, stream := range fnt.clients {
-		stream <- msg
+	for _, sub := range fnt.subs {
+		select {
+		case sub.stream <- msg:
+		case <-sub.done:
+		}
 	}
 }
 
-func (fnt *fanout) sub(id int) <-chan message {
+func (fnt *fanout) sub(id int) subscription {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	stream := make(chan message)
-	fnt.clients[id] = stream
-	return stream
+	sub := subscription{
+		stream: make(chan message),
+		done:   make(chan struct{}),
+	}
+	fnt.subs[id] = sub
+	return sub
 }
 
 func (fnt *fanout) unsub(id int) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	delete(fnt.clients, id)
+	delete(fnt.subs, id)
 }

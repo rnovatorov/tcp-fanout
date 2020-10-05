@@ -41,15 +41,16 @@ func (cli *client) run() error {
 	defer cli.closePipe(rf, wf)
 	rfd, wfd := rf.Fd(), wf.Fd()
 
-	stream := cli.fnt.sub(cli.id)
+	sub := cli.fnt.sub(cli.id)
 	defer cli.fnt.unsub(cli.id)
+	defer close(sub.done)
 
 	for {
 		var msg message
 		select {
 		case <-cli.stp:
 			return nil
-		case msg = <-stream:
+		case msg = <-sub.stream:
 		}
 		if err := cli.copy(int(wfd), msg.fd, msg.n); err != nil {
 			return fmt.Errorf("copy: %v", err)
