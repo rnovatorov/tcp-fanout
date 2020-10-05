@@ -1,3 +1,3 @@
-module go-splice
+module tcp-fanout
 
 go 1.15
