@@ -16,7 +16,6 @@ type fanout struct {
 
 	stp  chan struct{}
 	stpd chan struct{}
-	ups  *upstream
 
 	mu   sync.Mutex
 	subs map[int]subscription
