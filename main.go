@@ -26,22 +26,18 @@ type parsedArgs struct {
 
 func parseArgs() parsedArgs {
 	args := parsedArgs{
-		connectAddr:    flag.String("connect", "", "address to connect to"),
-		connectRetries: flag.Int("retries", 8, "how many times to retry to connect"),
-		connectIdle:    flag.Duration("interval", time.Second, "interval between connect retries"),
-		listenAddr:     flag.String("listen", "", "address to listen to"),
-		pprofAddr:      flag.String("pprof", "", "pprof address"),
+		connectAddr:    flag.String("connect-addr", "", "address to connect to"),
+		connectRetries: flag.Int("connect-retries", 8, "how many times to retry to connect"),
+		connectIdle:    flag.Duration("connect-idle", time.Second, "interval between connect retries"),
+		listenAddr:     flag.String("listen-addr", "", "address to listen to"),
+		pprofAddr:      flag.String("pprof-addr", "", "pprof address"),
 	}
 	flag.Parse()
 	return args
 }
 
 func run(args parsedArgs) error {
-	if *args.pprofAddr != "" {
-		go func() {
-			log.Println(http.ListenAndServe(*args.pprofAddr, nil))
-		}()
-	}
+	perr := startPprof(*args.pprofAddr)
 
 	fnt := newFanout(*args.connectAddr, *args.connectRetries, *args.connectIdle)
 	ferr := fnt.start()
@@ -52,9 +48,24 @@ func run(args parsedArgs) error {
 	defer srv.stop()
 
 	select {
+	case err := <-perr:
+		return fmt.Errorf("pprof: %v", err)
 	case err := <-ferr:
 		return fmt.Errorf("fanout: %v", err)
 	case err := <-serr:
 		return fmt.Errorf("server: %v", err)
 	}
+}
+
+func startPprof(addr string) <-chan error {
+	if addr == "" {
+		return nil
+	}
+	errs := make(chan error, 1)
+	go func() {
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			errs <- err
+		}
+	}()
+	return errs
 }
