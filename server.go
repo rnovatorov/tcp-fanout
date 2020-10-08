@@ -84,8 +84,6 @@ func (srv *server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 	conns := make(chan net.Conn)
 	errs := make(chan error, 1)
 	go func() {
-		defer close(conns)
-		defer close(errs)
 		for {
 			conn, err := srv.acceptConn(lsn)
 			if err != nil {
