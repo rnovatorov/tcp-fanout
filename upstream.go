@@ -33,12 +33,11 @@ func newUpstream(conn net.Conn, fnt *fanout, stp chan struct{}) (*upstream, erro
 }
 
 func (ups *upstream) run() error {
-	pipes, err := ups.makePipes()
+	buf, err := newPipebuf(2, true)
 	if err != nil {
-		return fmt.Errorf("make pipes: %v", err)
+		return fmt.Errorf("new pipebuf: %v", err)
 	}
-	defer ups.destroyPipes(pipes)
-	sizes := make([]int, len(pipes))
+	defer buf.close()
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0644)
 	if err != nil {
@@ -47,10 +46,9 @@ func (ups *upstream) run() error {
 	defer devNull.Close()
 	devNullFd := devNull.Fd()
 
-	for i := 0; ; i %= len(pipes) {
-		// FIXME: Store pipe fds instead of calling Fd.
-		rf, wf := pipes[i][0], pipes[i][1]
-		rfd, wfd := rf.Fd(), wf.Fd()
+	sizes := make([]int, len(buf))
+	for i := 0; ; i %= len(buf) {
+		rfd, wfd := buf[i][0], buf[i][1]
 		size := sizes[i]
 		if err := ups.discard(int(devNullFd), int(rfd), size); err != nil {
 			return fmt.Errorf("discard: %v", err)
@@ -97,32 +95,4 @@ func (ups *upstream) discard(dst, src, remain int) error {
 		remain -= n
 	}
 	return nil
-}
-
-func (ups *upstream) makePipes() ([][2]*os.File, error) {
-	pipes := make([][2]*os.File, 2)
-	for i := range pipes {
-		rf, wf, err := os.Pipe()
-		if err != nil {
-			for j := 0; j < i; j++ {
-				pipes[j][0].Close()
-				pipes[j][1].Close()
-			}
-			return nil, fmt.Errorf("make pipes[%d]: %v", i, err)
-		}
-		pipes[i][0], pipes[i][1] = rf, wf
-	}
-	return pipes, nil
-}
-
-func (ups *upstream) destroyPipes(pipes [][2]*os.File) {
-	for i, pipe := range pipes {
-		rf, wf := pipe[0], pipe[1]
-		if err := rf.Close(); err != nil {
-			log.Printf("error, ups: close pipes[%d] reader: %v", i, err)
-		}
-		if err := wf.Close(); err != nil {
-			log.Printf("error, ups: close pipes[%d] writer: %v", i, err)
-		}
-	}
 }
