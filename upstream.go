@@ -92,6 +92,9 @@ func (ups *upstream) discard(dst, src, remain int) error {
 		if err != nil {
 			return fmt.Errorf("splice: %v", err)
 		}
+		if n == 0 {
+			return errors.New("eof")
+		}
 		remain -= n
 	}
 	return nil
