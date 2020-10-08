@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 type server struct {
@@ -70,12 +71,15 @@ func (srv *server) serve() error {
 func (srv *server) handle(id int, conn net.Conn) {
 	defer srv.wg.Done()
 	defer srv.closeConn(conn)
-	client, err := newClient(id, conn, srv.fnt, srv.stp)
-	if err != nil {
-		log.Printf("error, new client-%d: %v", id, err)
-		return
+	cli := &client{
+		id:   id,
+		conn: conn,
+		fnt:  srv.fnt,
+		stp:  srv.stp,
+		// FIXME: Hard-code.
+		timeout: 5 * time.Second,
 	}
-	if err := client.run(); err != nil {
+	if err := cli.run(); err != nil {
 		log.Printf("error, run client-%d: %v", id, err)
 	}
 }

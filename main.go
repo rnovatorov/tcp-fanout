@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// https://web.archive.org/web/20130521163124/http://kerneltrap.org/node/6505
 func main() {
 	flag.Parse()
 

@@ -1,9 +1,6 @@
 package main
 
-type message struct {
-	fd int
-	n  int
-}
+type message []byte
 
 type subscription struct {
 	stream chan message

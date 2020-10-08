@@ -45,10 +45,13 @@ func (fnt *fanout) start() <-chan error {
 			}
 			defer fnt.closeConn(conn)
 
-			ups, err := newUpstream(conn, fnt, fnt.stp)
-			if err != nil {
-				errch <- fmt.Errorf("new upstream: %v", err)
-				return
+			ups := &upstream{
+				conn: conn,
+				fnt:  fnt,
+				stp:  fnt.stp,
+				// FIXME: Hard-code.
+				bufsize: 1 << 16,
+				timeout: 5 * time.Second,
 			}
 			if err := ups.run(); err != nil {
 				log.Printf("error, run upstream: %v", err)
@@ -80,7 +83,7 @@ func (fnt *fanout) connect() (net.Conn, error) {
 		// FIXME: Dial with context.
 		conn, lastErr = net.Dial("tcp", fnt.addr)
 		if lastErr != nil {
-			log.Printf("error, dial: %v", lastErr)
+			log.Printf("error, %v", lastErr)
 			select {
 			case <-time.After(fnt.idle):
 				continue
