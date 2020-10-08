@@ -34,13 +34,13 @@ func newFanout(addr string, retries int, idle time.Duration) *fanout {
 }
 
 func (fnt *fanout) start() <-chan error {
-	errch := make(chan error, 1)
+	errs := make(chan error, 1)
 	go func() {
 		defer close(fnt.stpd)
 		for {
 			conn, err := fnt.connect()
 			if err != nil {
-				errch <- fmt.Errorf("connect: %v", err)
+				errs <- fmt.Errorf("connect: %v", err)
 				return
 			}
 			defer fnt.closeConn(conn)
@@ -58,7 +58,7 @@ func (fnt *fanout) start() <-chan error {
 			}
 		}
 	}()
-	return errch
+	return errs
 }
 
 func (fnt *fanout) closeConn(conn net.Conn) {

@@ -26,13 +26,13 @@ func newServer(addr string, fnt *fanout) *server {
 }
 
 func (srv *server) start() <-chan error {
-	errch := make(chan error, 1)
+	errs := make(chan error, 1)
 	go func() {
 		defer close(srv.stpd)
 		err := srv.serve()
-		errch <- fmt.Errorf("serve: %v", err)
+		errs <- fmt.Errorf("serve: %v", err)
 	}()
-	return errch
+	return errs
 }
 
 func (srv *server) stop() {
