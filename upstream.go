@@ -62,7 +62,9 @@ func (ups *upstream) run() error {
 		if n == 0 {
 			return errors.New("eof")
 		}
-		ups.fnt.pub(message{fd: int(rfd), n: n})
+		if err := ups.fnt.pub(message{fd: int(rfd), n: n}); err != nil {
+			return fmt.Errorf("pub: %v", err)
+		}
 		sizes[i] = n
 		i++
 	}

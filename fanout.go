@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -93,15 +94,18 @@ func (fnt *fanout) connect() (net.Conn, error) {
 	return nil, fmt.Errorf("stopped after %d retries: %v", fnt.retries, lastErr)
 }
 
-func (fnt *fanout) pub(msg message) {
+func (fnt *fanout) pub(msg message) error {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
 	for _, sub := range fnt.subs {
 		select {
 		case sub.stream <- msg:
 		case <-sub.done:
+		case <-fnt.stp:
+			return errors.New("stopped")
 		}
 	}
+	return nil
 }
 
 func (fnt *fanout) sub(id int) subscription {
