@@ -87,7 +87,7 @@ func (srv *server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 		for {
 			conn, err := srv.acceptConn(lsn)
 			if err != nil {
-				errs <- fmt.Errorf("accept conn: %v", err)
+				errs <- err
 				return
 			}
 			select {
@@ -104,7 +104,7 @@ func (srv *server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 func (srv *server) acceptConn(lsn net.Listener) (net.Conn, error) {
 	conn, err := lsn.Accept()
 	if err != nil {
-		return nil, fmt.Errorf("accept: %v", err)
+		return nil, err
 	}
 	log.Printf("info, accept %v->%v", conn.LocalAddr(), conn.RemoteAddr())
 	return conn, nil
