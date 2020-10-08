@@ -10,31 +10,44 @@ import (
 )
 
 func main() {
-	flag.Parse()
-
-	if err := run(); err != nil {
+	args := parseArgs()
+	if err := run(args); err != nil {
 		log.Fatalf("fatal, %v", err)
 	}
 }
 
-var connectAddr = flag.String("connect", "", "address to connect to")
-var connectRetries = flag.Int("retries", 8, "how many times to retry to connect")
-var connectIdle = flag.Duration("interval", time.Second, "interval between connect retries")
-var listenAddr = flag.String("listen", "", "address to listen to")
-var pprofAddr = flag.String("pprof", "", "pprof address")
+type parsedArgs struct {
+	connectAddr    *string
+	connectRetries *int
+	connectIdle    *time.Duration
+	listenAddr     *string
+	pprofAddr      *string
+}
 
-func run() error {
-	if *pprofAddr != "" {
+func parseArgs() parsedArgs {
+	args := parsedArgs{
+		connectAddr:    flag.String("connect", "", "address to connect to"),
+		connectRetries: flag.Int("retries", 8, "how many times to retry to connect"),
+		connectIdle:    flag.Duration("interval", time.Second, "interval between connect retries"),
+		listenAddr:     flag.String("listen", "", "address to listen to"),
+		pprofAddr:      flag.String("pprof", "", "pprof address"),
+	}
+	flag.Parse()
+	return args
+}
+
+func run(args parsedArgs) error {
+	if *args.pprofAddr != "" {
 		go func() {
-			log.Println(http.ListenAndServe(*pprofAddr, nil))
+			log.Println(http.ListenAndServe(*args.pprofAddr, nil))
 		}()
 	}
 
-	fnt := newFanout(*connectAddr, *connectRetries, *connectIdle)
+	fnt := newFanout(*args.connectAddr, *args.connectRetries, *args.connectIdle)
 	ferr := fnt.start()
 	defer fnt.stop()
 
-	srv := newServer(*listenAddr, fnt)
+	srv := newServer(*args.listenAddr, fnt)
 	serr := srv.start()
 	defer srv.stop()
 
