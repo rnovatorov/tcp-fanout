@@ -17,33 +17,49 @@ func main() {
 }
 
 type parsedArgs struct {
-	connectAddr    *string
-	connectRetries *int
-	connectIdle    *time.Duration
-	listenAddr     *string
-	pprofAddr      *string
+	connect  *string
+	retries  *int
+	idle     *time.Duration
+	listen   *string
+	pprof    *string
+	bufsize  *uint
+	rtimeout *time.Duration
+	wtimeout *time.Duration
 }
 
 func parseArgs() parsedArgs {
 	args := parsedArgs{
-		connectAddr:    flag.String("connect-addr", "", "address to connect to"),
-		connectRetries: flag.Int("connect-retries", 8, "how many times to retry to connect"),
-		connectIdle:    flag.Duration("connect-idle", time.Second, "interval between connect retries"),
-		listenAddr:     flag.String("listen-addr", "", "address to listen to"),
-		pprofAddr:      flag.String("pprof-addr", "", "pprof address"),
+		connect:  flag.String("connect", "", "address to connect to"),
+		retries:  flag.Int("retries", 8, "how many times to retry to connect"),
+		idle:     flag.Duration("idle", time.Second, "interval between connect retries"),
+		listen:   flag.String("listen", "", "address to listen to"),
+		pprof:    flag.String("pprof", "", "address for pprof to listen to"),
+		bufsize:  flag.Uint("bufsize", 1<<16, "size of upstream message buffer in bytes"),
+		rtimeout: flag.Duration("rtimeout", 8*time.Second, "time before considering upstream socket dead"),
+		wtimeout: flag.Duration("wtimeout", 8*time.Second, "time before considering client socket dead"),
 	}
 	flag.Parse()
 	return args
 }
 
 func run(args parsedArgs) error {
-	perr := startPprof(*args.pprofAddr)
+	perr := startPprof(*args.pprof)
 
-	fnt := newFanout(*args.connectAddr, *args.connectRetries, *args.connectIdle)
+	fnt := newFanout(fanoutParams{
+		connectAddr:         *args.connect,
+		connectRetries:      *args.retries,
+		connectIdle:         *args.idle,
+		upstreamBufsize:     *args.bufsize,
+		upstreamReadTimeout: *args.rtimeout,
+	})
 	ferr := fnt.start()
 	defer fnt.stop()
 
-	srv := newServer(*args.listenAddr, fnt)
+	srv := newServer(serverParams{
+		fanout:             fnt,
+		listenAddr:         *args.listen,
+		clientWriteTimeout: *args.wtimeout,
+	})
 	serr := srv.start()
 	defer srv.stop()
 

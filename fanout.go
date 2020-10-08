@@ -10,32 +10,42 @@ import (
 )
 
 type fanout struct {
-	addr    string
-	retries int
-	idle    time.Duration
-
-	stp  chan struct{}
-	stpd chan struct{}
-
-	mu   sync.Mutex
-	subs map[int]subscription
+	connectAddr         string
+	connectRetries      int
+	connectIdle         time.Duration
+	upstreamBufsize     uint
+	upstreamReadTimeout time.Duration
+	stopping            chan struct{}
+	stopped             chan struct{}
+	mu                  sync.Mutex
+	subscriptions       map[int]subscription
 }
 
-func newFanout(addr string, retries int, idle time.Duration) *fanout {
+type fanoutParams struct {
+	connectAddr         string
+	connectRetries      int
+	connectIdle         time.Duration
+	upstreamBufsize     uint
+	upstreamReadTimeout time.Duration
+}
+
+func newFanout(p fanoutParams) *fanout {
 	return &fanout{
-		addr:    addr,
-		retries: retries,
-		idle:    idle,
-		stp:     make(chan struct{}),
-		stpd:    make(chan struct{}),
-		subs:    make(map[int]subscription),
+		connectAddr:         p.connectAddr,
+		connectRetries:      p.connectRetries,
+		connectIdle:         p.connectIdle,
+		upstreamBufsize:     p.upstreamBufsize,
+		upstreamReadTimeout: p.upstreamReadTimeout,
+		stopping:            make(chan struct{}),
+		stopped:             make(chan struct{}),
+		subscriptions:       make(map[int]subscription),
 	}
 }
 
 func (fnt *fanout) start() <-chan error {
 	errs := make(chan error, 1)
 	go func() {
-		defer close(fnt.stpd)
+		defer close(fnt.stopped)
 		for {
 			conn, err := fnt.connect()
 			if err != nil {
@@ -45,12 +55,11 @@ func (fnt *fanout) start() <-chan error {
 			defer fnt.closeConn(conn)
 
 			ups := &upstream{
-				conn: conn,
-				fnt:  fnt,
-				stp:  fnt.stp,
-				// FIXME: Hard-code.
-				bufsize: 1 << 16,
-				timeout: 5 * time.Second,
+				conn:        conn,
+				fanout:      fnt,
+				stopping:    fnt.stopping,
+				bufsize:     fnt.upstreamBufsize,
+				readTimeout: fnt.upstreamReadTimeout,
 			}
 			if err := ups.run(); err != nil {
 				log.Printf("error, run upstream: %v", err)
@@ -68,42 +77,42 @@ func (fnt *fanout) closeConn(conn net.Conn) {
 
 func (fnt *fanout) stop() {
 	select {
-	case <-fnt.stpd:
+	case <-fnt.stopped:
 	default:
-		close(fnt.stp)
-		<-fnt.stpd
+		close(fnt.stopping)
+		<-fnt.stopped
 	}
 }
 
 func (fnt *fanout) connect() (net.Conn, error) {
 	var conn net.Conn
 	var lastErr error
-	for i := 0; i < fnt.retries; i++ {
+	for i := 0; i < fnt.connectRetries; i++ {
 		// FIXME: Dial with context.
-		conn, lastErr = net.Dial("tcp", fnt.addr)
+		conn, lastErr = net.Dial("tcp", fnt.connectAddr)
 		if lastErr != nil {
 			log.Printf("error, %v", lastErr)
 			select {
-			case <-time.After(fnt.idle):
+			case <-time.After(fnt.connectIdle):
 				continue
-			case <-fnt.stp:
+			case <-fnt.stopping:
 				return nil, lastErr
 			}
 		}
 		log.Printf("info, connected %v->%v", conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 	}
-	return nil, fmt.Errorf("stopped after %d retries: %v", fnt.retries, lastErr)
+	return nil, lastErr
 }
 
 func (fnt *fanout) pub(msg message) error {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	for _, sub := range fnt.subs {
+	for _, sub := range fnt.subscriptions {
 		select {
 		case sub.stream <- msg:
 		case <-sub.done:
-		case <-fnt.stp:
+		case <-fnt.stopping:
 			return errors.New("stopped")
 		}
 	}
@@ -117,12 +126,12 @@ func (fnt *fanout) sub(id int) subscription {
 		stream: make(chan message),
 		done:   make(chan struct{}),
 	}
-	fnt.subs[id] = sub
+	fnt.subscriptions[id] = sub
 	return sub
 }
 
 func (fnt *fanout) unsub(id int) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
-	delete(fnt.subs, id)
+	delete(fnt.subscriptions, id)
 }

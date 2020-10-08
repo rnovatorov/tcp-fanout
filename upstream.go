@@ -7,11 +7,11 @@ import (
 )
 
 type upstream struct {
-	conn    net.Conn
-	fnt     *fanout
-	stp     chan struct{}
-	bufsize int
-	timeout time.Duration
+	conn        net.Conn
+	fanout      *fanout
+	stopping    chan struct{}
+	bufsize     uint
+	readTimeout time.Duration
 }
 
 func (ups *upstream) run() error {
@@ -19,7 +19,7 @@ func (ups *upstream) run() error {
 	for i := 0; ; i = (i + 1) % len(bufs) {
 		buf := bufs[i]
 		n, readErr := ups.read(buf)
-		if pubErr := ups.fnt.pub(buf[:n]); pubErr != nil {
+		if pubErr := ups.fanout.pub(buf[:n]); pubErr != nil {
 			return fmt.Errorf("pub: %v", pubErr)
 		}
 		if readErr != nil {
@@ -37,7 +37,7 @@ func (ups *upstream) newBufs() [2][]byte {
 }
 
 func (ups *upstream) read(buf []byte) (int, error) {
-	ups.setReadTimeout()
+	ups.setReadDeadline()
 	for {
 		n, err := ups.conn.Read(buf[:])
 		if n == 0 {
@@ -50,7 +50,7 @@ func (ups *upstream) read(buf []byte) (int, error) {
 	}
 }
 
-func (ups *upstream) setReadTimeout() {
-	deadline := time.Now().Add(ups.timeout)
+func (ups *upstream) setReadDeadline() {
+	deadline := time.Now().Add(ups.readTimeout)
 	ups.conn.SetReadDeadline(deadline)
 }

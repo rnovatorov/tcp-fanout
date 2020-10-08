@@ -6,20 +6,20 @@ import (
 )
 
 type client struct {
-	id      int
-	conn    net.Conn
-	fnt     *fanout
-	stp     chan struct{}
-	timeout time.Duration
+	id           int
+	conn         net.Conn
+	fanout       *fanout
+	stopping     chan struct{}
+	writeTimeout time.Duration
 }
 
 func (cli *client) run() error {
-	sub := cli.fnt.sub(cli.id)
-	defer cli.fnt.unsub(cli.id)
+	sub := cli.fanout.sub(cli.id)
+	defer cli.fanout.unsub(cli.id)
 	defer close(sub.done)
 	for {
 		select {
-		case <-cli.stp:
+		case <-cli.stopping:
 			return nil
 		case msg := <-sub.stream:
 			if err := cli.write(msg); err != nil {
@@ -30,7 +30,7 @@ func (cli *client) run() error {
 }
 
 func (cli *client) write(msg message) error {
-	cli.setWriteTimeout()
+	cli.setWriteDeadline()
 	for len(msg) > 0 {
 		n, err := cli.conn.Write(msg)
 		if err != nil {
@@ -41,7 +41,7 @@ func (cli *client) write(msg message) error {
 	return nil
 }
 
-func (cli *client) setWriteTimeout() {
-	deadline := time.Now().Add(cli.timeout)
+func (cli *client) setWriteDeadline() {
+	deadline := time.Now().Add(cli.writeTimeout)
 	cli.conn.SetWriteDeadline(deadline)
 }

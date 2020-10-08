@@ -9,26 +9,34 @@ import (
 )
 
 type server struct {
-	addr string
-	fnt  *fanout
-	stp  chan struct{}
-	stpd chan struct{}
-	wg   sync.WaitGroup
+	fanout             *fanout
+	listenAddr         string
+	clientWriteTimeout time.Duration
+	stopping           chan struct{}
+	stopped            chan struct{}
+	handlers           sync.WaitGroup
 }
 
-func newServer(addr string, fnt *fanout) *server {
+type serverParams struct {
+	fanout             *fanout
+	listenAddr         string
+	clientWriteTimeout time.Duration
+}
+
+func newServer(p serverParams) *server {
 	return &server{
-		addr: addr,
-		fnt:  fnt,
-		stp:  make(chan struct{}),
-		stpd: make(chan struct{}),
+		fanout:             p.fanout,
+		listenAddr:         p.listenAddr,
+		clientWriteTimeout: p.clientWriteTimeout,
+		stopping:           make(chan struct{}),
+		stopped:            make(chan struct{}),
 	}
 }
 
 func (srv *server) start() <-chan error {
 	errs := make(chan error, 1)
 	go func() {
-		defer close(srv.stpd)
+		defer close(srv.stopped)
 		err := srv.serve()
 		errs <- fmt.Errorf("serve: %v", err)
 	}()
@@ -37,47 +45,46 @@ func (srv *server) start() <-chan error {
 
 func (srv *server) stop() {
 	select {
-	case <-srv.stpd:
+	case <-srv.stopped:
 	default:
-		close(srv.stp)
-		<-srv.stpd
+		close(srv.stopping)
+		<-srv.stopped
 	}
 }
 
 func (srv *server) serve() error {
-	defer srv.wg.Wait()
+	defer srv.handlers.Wait()
 
-	lsn, err := net.Listen("tcp", srv.addr)
+	listener, err := net.Listen("tcp", srv.listenAddr)
 	if err != nil {
 		return fmt.Errorf("listen: %v", err)
 	}
-	log.Printf("info, listening on %s", srv.addr)
-	defer lsn.Close()
+	log.Printf("info, listening on %s", srv.listenAddr)
+	defer listener.Close()
 
-	conns, errs := srv.acceptConns(lsn)
+	conns, errs := srv.acceptConns(listener)
 	for id := 0; ; id++ {
 		select {
-		case <-srv.stp:
+		case <-srv.stopping:
 			return nil
 		case err := <-errs:
 			return fmt.Errorf("accept conns: %v", err)
 		case conn := <-conns:
-			srv.wg.Add(1)
+			srv.handlers.Add(1)
 			go srv.handle(id, conn)
 		}
 	}
 }
 
 func (srv *server) handle(id int, conn net.Conn) {
-	defer srv.wg.Done()
+	defer srv.handlers.Done()
 	defer srv.closeConn(conn)
 	cli := &client{
-		id:   id,
-		conn: conn,
-		fnt:  srv.fnt,
-		stp:  srv.stp,
-		// FIXME: Hard-code.
-		timeout: 5 * time.Second,
+		id:           id,
+		conn:         conn,
+		fanout:          srv.fanout,
+		stopping:     srv.stopping,
+		writeTimeout: srv.clientWriteTimeout,
 	}
 	if err := cli.run(); err != nil {
 		log.Printf("error, run client-%d: %v", id, err)
@@ -96,7 +103,7 @@ func (srv *server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 			}
 			select {
 			case conns <- conn:
-			case <-srv.stp:
+			case <-srv.stopping:
 				srv.closeConn(conn)
 				return
 			}
