@@ -7,6 +7,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"time"
+
+	"github.com/rnovatorov/tcpfanout/pkg/tcpfanout"
 )
 
 func main() {
@@ -45,23 +47,23 @@ func parseArgs() parsedArgs {
 func run(args parsedArgs) error {
 	perr := startPprof(*args.pprof)
 
-	fnt := newFanout(fanoutParams{
-		connectAddr:         *args.connect,
-		connectRetries:      *args.retries,
-		connectIdle:         *args.idle,
-		upstreamBufsize:     *args.bufsize,
-		upstreamReadTimeout: *args.rtimeout,
+	fnt := tcpfanout.NewFanout(tcpfanout.FanoutParams{
+		ConnectAddr:         *args.connect,
+		ConnectRetries:      *args.retries,
+		ConnectIdle:         *args.idle,
+		UpstreamBufsize:     *args.bufsize,
+		UpstreamReadTimeout: *args.rtimeout,
 	})
-	ferr := fnt.start()
-	defer fnt.stop()
+	ferr := fnt.Start()
+	defer fnt.Stop()
 
-	srv := newServer(serverParams{
-		fanout:             fnt,
-		listenAddr:         *args.listen,
-		clientWriteTimeout: *args.wtimeout,
+	srv := tcpfanout.NewServer(tcpfanout.ServerParams{
+		Fanout:             fnt,
+		ListenAddr:         *args.listen,
+		ClientWriteTimeout: *args.wtimeout,
 	})
-	serr := srv.start()
-	defer srv.stop()
+	serr := srv.Start()
+	defer srv.Stop()
 
 	select {
 	case err := <-perr:

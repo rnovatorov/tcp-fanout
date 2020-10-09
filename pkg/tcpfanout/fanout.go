@@ -1,4 +1,4 @@
-package main
+package tcpfanout
 
 import (
 	"errors"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type fanout struct {
+type Fanout struct {
 	connectAddr         string
 	connectRetries      int
 	connectIdle         time.Duration
@@ -21,28 +21,28 @@ type fanout struct {
 	subscriptions       map[int]subscription
 }
 
-type fanoutParams struct {
-	connectAddr         string
-	connectRetries      int
-	connectIdle         time.Duration
-	upstreamBufsize     uint
-	upstreamReadTimeout time.Duration
+type FanoutParams struct {
+	ConnectAddr         string
+	ConnectRetries      int
+	ConnectIdle         time.Duration
+	UpstreamBufsize     uint
+	UpstreamReadTimeout time.Duration
 }
 
-func newFanout(p fanoutParams) *fanout {
-	return &fanout{
-		connectAddr:         p.connectAddr,
-		connectRetries:      p.connectRetries,
-		connectIdle:         p.connectIdle,
-		upstreamBufsize:     p.upstreamBufsize,
-		upstreamReadTimeout: p.upstreamReadTimeout,
+func NewFanout(p FanoutParams) *Fanout {
+	return &Fanout{
+		connectAddr:         p.ConnectAddr,
+		connectRetries:      p.ConnectRetries,
+		connectIdle:         p.ConnectIdle,
+		upstreamBufsize:     p.UpstreamBufsize,
+		upstreamReadTimeout: p.UpstreamReadTimeout,
 		stopping:            make(chan struct{}),
 		stopped:             make(chan struct{}),
 		subscriptions:       make(map[int]subscription),
 	}
 }
 
-func (fnt *fanout) start() <-chan error {
+func (fnt *Fanout) Start() <-chan error {
 	errs := make(chan error, 1)
 	go func() {
 		defer close(fnt.stopped)
@@ -69,13 +69,13 @@ func (fnt *fanout) start() <-chan error {
 	return errs
 }
 
-func (fnt *fanout) closeConn(conn net.Conn) {
+func (fnt *Fanout) closeConn(conn net.Conn) {
 	if err := conn.Close(); err != nil {
 		log.Printf("error, close fanout conn: %v", err)
 	}
 }
 
-func (fnt *fanout) stop() {
+func (fnt *Fanout) Stop() {
 	select {
 	case <-fnt.stopped:
 	default:
@@ -84,7 +84,7 @@ func (fnt *fanout) stop() {
 	}
 }
 
-func (fnt *fanout) connect() (net.Conn, error) {
+func (fnt *Fanout) connect() (net.Conn, error) {
 	var conn net.Conn
 	var lastErr error
 	for i := 0; i < fnt.connectRetries; i++ {
@@ -105,7 +105,7 @@ func (fnt *fanout) connect() (net.Conn, error) {
 	return nil, lastErr
 }
 
-func (fnt *fanout) pub(msg message) error {
+func (fnt *Fanout) pub(msg message) error {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
 	for _, sub := range fnt.subscriptions {
@@ -119,7 +119,7 @@ func (fnt *fanout) pub(msg message) error {
 	return nil
 }
 
-func (fnt *fanout) sub(id int) subscription {
+func (fnt *Fanout) sub(id int) subscription {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
 	sub := subscription{
@@ -130,7 +130,7 @@ func (fnt *fanout) sub(id int) subscription {
 	return sub
 }
 
-func (fnt *fanout) unsub(id int) {
+func (fnt *Fanout) unsub(id int) {
 	fnt.mu.Lock()
 	defer fnt.mu.Unlock()
 	delete(fnt.subscriptions, id)

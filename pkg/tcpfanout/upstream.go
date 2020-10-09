@@ -1,4 +1,4 @@
-package main
+package tcpfanout
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 
 type upstream struct {
 	conn        net.Conn
-	fanout      *fanout
+	fanout      *Fanout
 	stopping    chan struct{}
 	bufsize     uint
 	readTimeout time.Duration

@@ -1,4 +1,4 @@
-package main
+package tcpfanout
 
 type message []byte
 

@@ -1,4 +1,4 @@
-package main
+package tcpfanout
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-type server struct {
-	fanout             *fanout
+type Server struct {
+	fanout             *Fanout
 	listenAddr         string
 	clientWriteTimeout time.Duration
 	stopping           chan struct{}
@@ -17,23 +17,23 @@ type server struct {
 	handlers           sync.WaitGroup
 }
 
-type serverParams struct {
-	fanout             *fanout
-	listenAddr         string
-	clientWriteTimeout time.Duration
+type ServerParams struct {
+	Fanout             *Fanout
+	ListenAddr         string
+	ClientWriteTimeout time.Duration
 }
 
-func newServer(p serverParams) *server {
-	return &server{
-		fanout:             p.fanout,
-		listenAddr:         p.listenAddr,
-		clientWriteTimeout: p.clientWriteTimeout,
+func NewServer(p ServerParams) *Server {
+	return &Server{
+		fanout:             p.Fanout,
+		listenAddr:         p.ListenAddr,
+		clientWriteTimeout: p.ClientWriteTimeout,
 		stopping:           make(chan struct{}),
 		stopped:            make(chan struct{}),
 	}
 }
 
-func (srv *server) start() <-chan error {
+func (srv *Server) Start() <-chan error {
 	errs := make(chan error, 1)
 	go func() {
 		defer close(srv.stopped)
@@ -43,7 +43,7 @@ func (srv *server) start() <-chan error {
 	return errs
 }
 
-func (srv *server) stop() {
+func (srv *Server) Stop() {
 	select {
 	case <-srv.stopped:
 	default:
@@ -52,7 +52,7 @@ func (srv *server) stop() {
 	}
 }
 
-func (srv *server) serve() error {
+func (srv *Server) serve() error {
 	defer srv.handlers.Wait()
 
 	listener, err := net.Listen("tcp", srv.listenAddr)
@@ -76,13 +76,13 @@ func (srv *server) serve() error {
 	}
 }
 
-func (srv *server) handle(id int, conn net.Conn) {
+func (srv *Server) handle(id int, conn net.Conn) {
 	defer srv.handlers.Done()
 	defer srv.closeConn(conn)
 	cli := &client{
 		id:           id,
 		conn:         conn,
-		fanout:          srv.fanout,
+		fanout:       srv.fanout,
 		stopping:     srv.stopping,
 		writeTimeout: srv.clientWriteTimeout,
 	}
@@ -91,7 +91,7 @@ func (srv *server) handle(id int, conn net.Conn) {
 	}
 }
 
-func (srv *server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error) {
+func (srv *Server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error) {
 	conns := make(chan net.Conn)
 	errs := make(chan error, 1)
 	go func() {
@@ -112,7 +112,7 @@ func (srv *server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 	return conns, errs
 }
 
-func (srv *server) acceptConn(lsn net.Listener) (net.Conn, error) {
+func (srv *Server) acceptConn(lsn net.Listener) (net.Conn, error) {
 	conn, err := lsn.Accept()
 	if err != nil {
 		return nil, err
@@ -121,7 +121,7 @@ func (srv *server) acceptConn(lsn net.Listener) (net.Conn, error) {
 	return conn, nil
 }
 
-func (srv *server) closeConn(conn net.Conn) {
+func (srv *Server) closeConn(conn net.Conn) {
 	la, ra := conn.LocalAddr(), conn.RemoteAddr()
 	if err := conn.Close(); err != nil {
 		log.Printf("warn, close %v->%v: %v", la, ra, err)

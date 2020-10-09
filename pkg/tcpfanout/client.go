@@ -1,4 +1,4 @@
-package main
+package tcpfanout
 
 import (
 	"net"
@@ -8,7 +8,7 @@ import (
 type client struct {
 	id           int
 	conn         net.Conn
-	fanout       *fanout
+	fanout       *Fanout
 	stopping     chan struct{}
 	writeTimeout time.Duration
 }
