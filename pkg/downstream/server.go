@@ -1,4 +1,4 @@
-package tcpfanout
+package downstream
 
 import (
 	"fmt"
@@ -6,60 +6,60 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/rnovatorov/tcpfanout/pkg/streaming"
 )
 
-type Server struct {
-	fanout             *Fanout
-	listenAddr         string
-	clientWriteTimeout time.Duration
-	stopping           chan struct{}
-	stopped            chan struct{}
-	handlers           sync.WaitGroup
-}
-
 type ServerParams struct {
-	Fanout             *Fanout
-	ListenAddr         string
-	ClientWriteTimeout time.Duration
+	ListenAddr   string
+	Fanout       *streaming.Fanout
+	WriteTimeout time.Duration
 }
 
-func NewServer(p ServerParams) *Server {
-	return &Server{
-		fanout:             p.Fanout,
-		listenAddr:         p.ListenAddr,
-		clientWriteTimeout: p.ClientWriteTimeout,
-		stopping:           make(chan struct{}),
-		stopped:            make(chan struct{}),
+type Server struct {
+	ServerParams
+	handlers sync.WaitGroup
+	stopped  chan struct{}
+	once     sync.Once
+	stopping chan struct{}
+}
+
+func StartServer(params ServerParams) (*Server, <-chan error) {
+	srv := &Server{
+		ServerParams: params,
+		stopped:      make(chan struct{}),
+		stopping:     make(chan struct{}),
 	}
-}
-
-func (srv *Server) Start() <-chan error {
 	errs := make(chan error, 1)
 	go func() {
-		defer close(srv.stopped)
-		err := srv.serve()
-		errs <- fmt.Errorf("serve: %v", err)
+		if err := srv.run(); err != nil {
+			errs <- err
+		}
 	}()
-	return errs
+	return srv, errs
 }
 
 func (srv *Server) Stop() {
-	select {
-	case <-srv.stopped:
-	default:
-		close(srv.stopping)
-		<-srv.stopped
+	srv.once.Do(func() { close(srv.stopping) })
+	<-srv.stopped
+}
+
+func (srv *Server) run() error {
+	defer close(srv.stopped)
+	if err := srv.serve(); err != nil {
+		return fmt.Errorf("serve: %v", err)
 	}
+	return nil
 }
 
 func (srv *Server) serve() error {
 	defer srv.handlers.Wait()
 
-	listener, err := net.Listen("tcp", srv.listenAddr)
+	listener, err := net.Listen("tcp", srv.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen: %v", err)
 	}
-	log.Printf("info, listening on %s", srv.listenAddr)
+	log.Printf("info, listening on %s", srv.ListenAddr)
 	defer listener.Close()
 
 	conns, errs := srv.acceptConns(listener)
@@ -68,26 +68,30 @@ func (srv *Server) serve() error {
 		case <-srv.stopping:
 			return nil
 		case err := <-errs:
-			return fmt.Errorf("accept conns: %v", err)
+			return err
 		case conn := <-conns:
 			srv.handlers.Add(1)
-			go srv.handle(id, conn)
+			go func() {
+				defer srv.handlers.Done()
+				defer closeConn(conn)
+				srv.handle(id, conn)
+			}()
 		}
 	}
 }
 
 func (srv *Server) handle(id int, conn net.Conn) {
-	defer srv.handlers.Done()
-	defer srv.closeConn(conn)
-	cli := &client{
+	s := &session{
 		id:           id,
 		conn:         conn,
-		fanout:       srv.fanout,
+		fanout:       srv.Fanout,
+		writeTimeout: srv.WriteTimeout,
 		stopping:     srv.stopping,
-		writeTimeout: srv.clientWriteTimeout,
 	}
-	if err := cli.run(); err != nil {
-		log.Printf("error, run client-%d: %v", id, err)
+	if err := s.run(); err != nil {
+		log.Printf("error, downstream session-%d: %v", id, err)
+	} else {
+		log.Printf("info, stopped downstream session-%d", id)
 	}
 }
 
@@ -104,7 +108,7 @@ func (srv *Server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 			select {
 			case conns <- conn:
 			case <-srv.stopping:
-				srv.closeConn(conn)
+				closeConn(conn)
 				return
 			}
 		}
@@ -121,7 +125,7 @@ func (srv *Server) acceptConn(lsn net.Listener) (net.Conn, error) {
 	return conn, nil
 }
 
-func (srv *Server) closeConn(conn net.Conn) {
+func closeConn(conn net.Conn) {
 	la, ra := conn.LocalAddr(), conn.RemoteAddr()
 	if err := conn.Close(); err != nil {
 		log.Printf("warn, close %v->%v: %v", la, ra, err)
