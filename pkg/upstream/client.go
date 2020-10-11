@@ -3,7 +3,6 @@ package upstream
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rnovatorov/tcpfanout/pkg/errs"
+	"github.com/rnovatorov/tcpfanout/pkg/lognet"
 	"github.com/rnovatorov/tcpfanout/pkg/streaming"
 )
 
@@ -55,10 +55,10 @@ func (cli *Client) run() error {
 	for {
 		conn, err := cli.connect()
 		if err != nil {
-			return fmt.Errorf("connect: %v", err)
+			return err
 		}
 		cli.handle(conn)
-		closeConn(conn)
+		conn.Close()
 	}
 }
 
@@ -72,7 +72,6 @@ func (cli *Client) connect() (net.Conn, error) {
 			if !cli.shouldRetry(lastErr) {
 				return nil, lastErr
 			}
-			log.Printf("error, %v", lastErr)
 			select {
 			case <-time.After(cli.ConnectIdle):
 				continue
@@ -83,7 +82,6 @@ func (cli *Client) connect() (net.Conn, error) {
 				return nil, errs.Stopping
 			}
 		}
-		log.Printf("info, connect %v->%v", conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
 	}
 	return nil, lastErr
@@ -95,7 +93,7 @@ func (cli *Client) dial() (net.Conn, error) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	done := make(chan struct{})
 	go func() {
-		var d net.Dialer
+		var d lognet.Dialer
 		conn, err = d.DialContext(ctx, "tcp", cli.ConnectAddr)
 		close(done)
 	}()
@@ -139,13 +137,4 @@ func (cli *Client) handle(conn net.Conn) {
 	case <-done:
 	case <-cli.stopping:
 	}
-}
-
-func closeConn(conn net.Conn) {
-	la, ra := conn.LocalAddr(), conn.RemoteAddr()
-	if err := conn.Close(); err != nil {
-		log.Printf("warn, close %v->%v: %v", la, ra, err)
-		return
-	}
-	log.Printf("info, close %v->%v", la, ra)
 }

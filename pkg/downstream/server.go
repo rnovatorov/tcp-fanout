@@ -1,13 +1,13 @@
 package downstream
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/rnovatorov/tcpfanout/pkg/errs"
+	"github.com/rnovatorov/tcpfanout/pkg/lognet"
 	"github.com/rnovatorov/tcpfanout/pkg/streaming"
 )
 
@@ -62,14 +62,13 @@ func (srv *Server) run() error {
 	var handlers sync.WaitGroup
 	defer handlers.Wait()
 
-	lsn, err := net.Listen("tcp", srv.ListenAddr)
+	lsn, err := lognet.Listen("tcp", srv.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("listen: %v", err)
+		return err
 	}
 	defer lsn.Close()
 
 	srv.addr = lsn.Addr()
-	log.Printf("info, listening on %v", srv.addr)
 	close(srv.started)
 
 	conns, errc := srv.acceptConns(lsn)
@@ -83,11 +82,32 @@ func (srv *Server) run() error {
 			handlers.Add(1)
 			go func() {
 				defer handlers.Done()
-				defer closeConn(conn)
+				defer conn.Close()
 				srv.handle(id, conn)
 			}()
 		}
 	}
+}
+
+func (srv *Server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error) {
+	conns := make(chan net.Conn)
+	errc := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := lsn.Accept()
+			if err != nil {
+				errc <- err
+				return
+			}
+			select {
+			case conns <- conn:
+			case <-srv.stopping:
+				conn.Close()
+				return
+			}
+		}
+	}()
+	return conns, errc
 }
 
 func (srv *Server) handle(id int, conn net.Conn) {
@@ -111,43 +131,4 @@ func (srv *Server) handle(id int, conn net.Conn) {
 	case <-done:
 	case <-srv.stopping:
 	}
-}
-
-func (srv *Server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error) {
-	conns := make(chan net.Conn)
-	errc := make(chan error, 1)
-	go func() {
-		for {
-			conn, err := srv.acceptConn(lsn)
-			if err != nil {
-				errc <- err
-				return
-			}
-			select {
-			case conns <- conn:
-			case <-srv.stopping:
-				closeConn(conn)
-				return
-			}
-		}
-	}()
-	return conns, errc
-}
-
-func (srv *Server) acceptConn(lsn net.Listener) (net.Conn, error) {
-	conn, err := lsn.Accept()
-	if err != nil {
-		return nil, err
-	}
-	log.Printf("info, accept %v->%v", conn.LocalAddr(), conn.RemoteAddr())
-	return conn, nil
-}
-
-func closeConn(conn net.Conn) {
-	la, ra := conn.LocalAddr(), conn.RemoteAddr()
-	if err := conn.Close(); err != nil {
-		log.Printf("warn, close %v->%v: %v", la, ra, err)
-		return
-	}
-	log.Printf("info, close %v->%v", la, ra)
 }
