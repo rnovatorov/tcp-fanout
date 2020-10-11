@@ -33,14 +33,14 @@ func StartClient(params ClientParams) (*Client, <-chan error) {
 		stopped:      make(chan struct{}),
 		stopping:     make(chan struct{}),
 	}
-	errs := make(chan error, 1)
+	errc := make(chan error, 1)
 	go func() {
 		defer close(cli.stopped)
 		if err := cli.run(); err != nil {
-			errs <- err
+			errc <- err
 		}
 	}()
-	return cli, errs
+	return cli, errc
 }
 
 func (cli *Client) Stop() {

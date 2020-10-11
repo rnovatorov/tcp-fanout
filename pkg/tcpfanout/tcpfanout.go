@@ -28,17 +28,17 @@ func Start(cfg Config) (*TCPFanout, error, <-chan error) {
 		stopped:  make(chan struct{}),
 		stopping: make(chan struct{}),
 	}
-	errs := make(chan error, 1)
+	errc := make(chan error, 1)
 	go func() {
 		defer close(tf.stopped)
 		if err := tf.run(); err != nil {
-			errs <- err
+			errc <- err
 		}
 	}()
 	select {
 	case <-tf.started:
-		return tf, nil, errs
-	case err := <-errs:
+		return tf, nil, errc
+	case err := <-errc:
 		return nil, err, nil
 	}
 }
@@ -87,11 +87,11 @@ func startPprof(addr string) <-chan error {
 	if addr == "" {
 		return nil
 	}
-	errs := make(chan error, 1)
+	errc := make(chan error, 1)
 	go func() {
 		if err := http.ListenAndServe(addr, nil); err != nil {
-			errs <- err
+			errc <- err
 		}
 	}()
-	return errs
+	return errc
 }

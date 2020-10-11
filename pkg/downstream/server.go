@@ -34,17 +34,17 @@ func StartServer(params ServerParams) (*Server, error, <-chan error) {
 		stopped:      make(chan struct{}),
 		stopping:     make(chan struct{}),
 	}
-	errs := make(chan error, 1)
+	errc := make(chan error, 1)
 	go func() {
 		defer close(srv.stopped)
 		if err := srv.run(); err != nil {
-			errs <- err
+			errc <- err
 		}
 	}()
 	select {
 	case <-srv.started:
-		return srv, nil, errs
-	case err := <-errs:
+		return srv, nil, errc
+	case err := <-errc:
 		return nil, err, nil
 	}
 }
@@ -72,12 +72,12 @@ func (srv *Server) run() error {
 	srv.addr = lsn.Addr()
 	close(srv.started)
 
-	conns, errs := srv.acceptConns(lsn)
+	conns, errc := srv.acceptConns(lsn)
 	for id := 0; ; id++ {
 		select {
 		case <-srv.stopping:
 			return errors.New("stopping")
-		case err := <-errs:
+		case err := <-errc:
 			return err
 		case conn := <-conns:
 			srv.handlers.Add(1)
@@ -115,12 +115,12 @@ func (srv *Server) handle(id int, conn net.Conn) {
 
 func (srv *Server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error) {
 	conns := make(chan net.Conn)
-	errs := make(chan error, 1)
+	errc := make(chan error, 1)
 	go func() {
 		for {
 			conn, err := srv.acceptConn(lsn)
 			if err != nil {
-				errs <- err
+				errc <- err
 				return
 			}
 			select {
@@ -131,7 +131,7 @@ func (srv *Server) acceptConns(lsn net.Listener) (<-chan net.Conn, <-chan error)
 			}
 		}
 	}()
-	return conns, errs
+	return conns, errc
 }
 
 func (srv *Server) acceptConn(lsn net.Listener) (net.Conn, error) {
