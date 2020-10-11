@@ -20,7 +20,6 @@ type ServerParams struct {
 type Server struct {
 	ServerParams
 	addr     net.Addr
-	handlers sync.WaitGroup
 	started  chan struct{}
 	stopped  chan struct{}
 	once     sync.Once
@@ -60,7 +59,8 @@ func (srv *Server) Addr() net.Addr {
 }
 
 func (srv *Server) run() error {
-	defer srv.handlers.Wait()
+	var handlers sync.WaitGroup
+	defer handlers.Wait()
 
 	lsn, err := net.Listen("tcp", srv.ListenAddr)
 	if err != nil {
@@ -80,9 +80,9 @@ func (srv *Server) run() error {
 		case err := <-errc:
 			return err
 		case conn := <-conns:
-			srv.handlers.Add(1)
+			handlers.Add(1)
 			go func() {
-				defer srv.handlers.Done()
+				defer handlers.Done()
 				defer closeConn(conn)
 				srv.handle(id, conn)
 			}()
