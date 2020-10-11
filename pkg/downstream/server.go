@@ -68,8 +68,8 @@ func (srv *Server) run() error {
 	}
 	defer lsn.Close()
 
-	log.Printf("info, listening on %s", srv.ListenAddr)
 	srv.addr = lsn.Addr()
+	log.Printf("info, listening on %v", srv.addr)
 	close(srv.started)
 
 	conns, errc := srv.acceptConns(lsn)
