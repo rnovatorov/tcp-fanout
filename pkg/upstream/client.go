@@ -1,13 +1,13 @@
 package upstream
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/rnovatorov/tcpfanout/pkg/errs"
 	"github.com/rnovatorov/tcpfanout/pkg/streaming"
 )
 
@@ -75,7 +75,7 @@ func (cli *Client) connect() (net.Conn, error) {
 				if lastErr != nil {
 					return nil, lastErr
 				}
-				return nil, errors.New("stopping")
+				return nil, errs.Stopping
 			}
 		}
 		log.Printf("info, connect %v->%v", conn.LocalAddr(), conn.RemoteAddr())

@@ -1,12 +1,12 @@
 package tcpfanout
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 
 	"github.com/rnovatorov/tcpfanout/pkg/downstream"
+	"github.com/rnovatorov/tcpfanout/pkg/errs"
 	"github.com/rnovatorov/tcpfanout/pkg/streaming"
 	"github.com/rnovatorov/tcpfanout/pkg/upstream"
 )
@@ -73,7 +73,7 @@ func (tf *TCPFanout) run() error {
 
 	select {
 	case <-tf.stopping:
-		return errors.New("stopping")
+		return errs.Stopping
 	case err := <-perr:
 		return fmt.Errorf("pprof: %v", err)
 	case err := <-cerr:

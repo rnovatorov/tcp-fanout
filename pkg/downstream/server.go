@@ -1,13 +1,13 @@
 package downstream
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/rnovatorov/tcpfanout/pkg/errs"
 	"github.com/rnovatorov/tcpfanout/pkg/streaming"
 )
 
@@ -76,7 +76,7 @@ func (srv *Server) run() error {
 	for id := 0; ; id++ {
 		select {
 		case <-srv.stopping:
-			return errors.New("stopping")
+			return errs.Stopping
 		case err := <-errc:
 			return err
 		case conn := <-conns:
