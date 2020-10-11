@@ -1,6 +1,7 @@
 package downstream
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -18,25 +19,34 @@ type ServerParams struct {
 
 type Server struct {
 	ServerParams
+	addr     net.Addr
 	handlers sync.WaitGroup
+	started  chan struct{}
 	stopped  chan struct{}
 	once     sync.Once
 	stopping chan struct{}
 }
 
-func StartServer(params ServerParams) (*Server, <-chan error) {
+func StartServer(params ServerParams) (*Server, error, <-chan error) {
 	srv := &Server{
 		ServerParams: params,
+		started:      make(chan struct{}),
 		stopped:      make(chan struct{}),
 		stopping:     make(chan struct{}),
 	}
 	errs := make(chan error, 1)
 	go func() {
+		defer close(srv.stopped)
 		if err := srv.run(); err != nil {
 			errs <- err
 		}
 	}()
-	return srv, errs
+	select {
+	case <-srv.started:
+		return srv, nil, errs
+	case err := <-errs:
+		return nil, err, nil
+	}
 }
 
 func (srv *Server) Stop() {
@@ -44,29 +54,29 @@ func (srv *Server) Stop() {
 	<-srv.stopped
 }
 
-func (srv *Server) run() error {
-	defer close(srv.stopped)
-	if err := srv.serve(); err != nil {
-		return fmt.Errorf("serve: %v", err)
-	}
-	return nil
+func (srv *Server) Addr() net.Addr {
+	<-srv.started
+	return srv.addr
 }
 
-func (srv *Server) serve() error {
+func (srv *Server) run() error {
 	defer srv.handlers.Wait()
 
-	listener, err := net.Listen("tcp", srv.ListenAddr)
+	lsn, err := net.Listen("tcp", srv.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen: %v", err)
 	}
-	log.Printf("info, listening on %s", srv.ListenAddr)
-	defer listener.Close()
+	defer lsn.Close()
 
-	conns, errs := srv.acceptConns(listener)
+	log.Printf("info, listening on %s", srv.ListenAddr)
+	srv.addr = lsn.Addr()
+	close(srv.started)
+
+	conns, errs := srv.acceptConns(lsn)
 	for id := 0; ; id++ {
 		select {
 		case <-srv.stopping:
-			return nil
+			return errors.New("stopping")
 		case err := <-errs:
 			return err
 		case conn := <-conns:
@@ -88,10 +98,18 @@ func (srv *Server) handle(id int, conn net.Conn) {
 		writeTimeout: srv.WriteTimeout,
 		stopping:     srv.stopping,
 	}
-	if err := s.run(); err != nil {
-		log.Printf("error, downstream session-%d: %v", id, err)
-	} else {
-		log.Printf("info, stopped downstream session-%d", id)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := s.run(); err != nil {
+			log.Printf("error, downstream session-%d: %v", id, err)
+		} else {
+			log.Printf("info, stopped downstream session-%d", id)
+		}
+	}()
+	select {
+	case <-done:
+	case <-srv.stopping:
 	}
 }
 

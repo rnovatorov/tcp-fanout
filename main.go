@@ -27,7 +27,10 @@ func run(args parsedArgs) error {
 		ReadTimeout:    *args.rtimeout,
 		WriteTimeout:   *args.wtimeout,
 	}
-	tf, errs := tcpfanout.Start(cfg)
+	tf, err, errs := tcpfanout.Start(cfg)
+	if err != nil {
+		return err
+	}
 	defer tf.Stop()
 	return <-errs
 }

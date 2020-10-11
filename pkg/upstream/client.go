@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -71,7 +72,10 @@ func (cli *Client) connect() (net.Conn, error) {
 			case <-time.After(cli.ConnectIdle):
 				continue
 			case <-cli.stopping:
-				return nil, lastErr
+				if lastErr != nil {
+					return nil, lastErr
+				}
+				return nil, errors.New("stopping")
 			}
 		}
 		log.Printf("info, connect %v->%v", conn.LocalAddr(), conn.RemoteAddr())
@@ -87,10 +91,18 @@ func (cli *Client) handle(conn net.Conn) {
 		bufsize:     cli.Bufsize,
 		readTimeout: cli.ReadTimeout,
 	}
-	if err := s.run(); err != nil {
-		log.Printf("error, upstream session: %v", err)
-	} else {
-		log.Printf("info, stopped upstream session")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := s.run(); err != nil {
+			log.Printf("error, upstream session: %v", err)
+		} else {
+			log.Printf("info, stopped upstream session")
+		}
+	}()
+	select {
+	case <-done:
+	case <-cli.stopping:
 	}
 }
 

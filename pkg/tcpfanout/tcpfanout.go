@@ -1,6 +1,7 @@
 package tcpfanout
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -11,16 +12,19 @@ import (
 )
 
 type TCPFanout struct {
-	cfg     Config
-	stopped chan struct{}
-
+	cfg      Config
+	fanout   *streaming.Fanout
+	started  chan struct{}
+	stopped  chan struct{}
 	once     sync.Once
 	stopping chan struct{}
 }
 
-func Start(cfg Config) (*TCPFanout, <-chan error) {
+func Start(cfg Config) (*TCPFanout, error, <-chan error) {
 	tf := &TCPFanout{
 		cfg:      cfg,
+		fanout:   streaming.NewFanout(),
+		started:  make(chan struct{}),
 		stopped:  make(chan struct{}),
 		stopping: make(chan struct{}),
 	}
@@ -31,7 +35,12 @@ func Start(cfg Config) (*TCPFanout, <-chan error) {
 			errs <- err
 		}
 	}()
-	return tf, errs
+	select {
+	case <-tf.started:
+		return tf, nil, errs
+	case err := <-errs:
+		return nil, err, nil
+	}
 }
 
 func (tf *TCPFanout) Stop() {
@@ -42,26 +51,29 @@ func (tf *TCPFanout) Stop() {
 func (tf *TCPFanout) run() error {
 	perr := startPprof(tf.cfg.PprofAddr)
 
-	fanout := streaming.NewFanout()
-
 	client, cerr := upstream.StartClient(upstream.ClientParams{
 		ConnectAddr:    tf.cfg.ConnectAddr,
 		ConnectRetries: tf.cfg.ConnectRetries,
 		ConnectIdle:    tf.cfg.ConnectIdle,
-		Fanout:         fanout,
+		Fanout:         tf.fanout,
 		Bufsize:        tf.cfg.Bufsize,
 		ReadTimeout:    tf.cfg.ReadTimeout,
 	})
 	defer client.Stop()
 
-	server, serr := downstream.StartServer(downstream.ServerParams{
+	server, err, serr := downstream.StartServer(downstream.ServerParams{
 		ListenAddr:   tf.cfg.ListenAddr,
-		Fanout:       fanout,
+		Fanout:       tf.fanout,
 		WriteTimeout: tf.cfg.WriteTimeout,
 	})
+	if err != nil {
+		return err
+	}
 	defer server.Stop()
 
 	select {
+	case <-tf.stopping:
+		return errors.New("stopping")
 	case err := <-perr:
 		return fmt.Errorf("pprof: %v", err)
 	case err := <-cerr:
