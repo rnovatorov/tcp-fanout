@@ -71,6 +71,8 @@ func (tf *TCPFanout) run() error {
 	}
 	defer server.Stop()
 
+	close(tf.started)
+
 	select {
 	case <-tf.stopping:
 		return errs.Stopping

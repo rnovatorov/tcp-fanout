@@ -1,10 +1,13 @@
 package upstream
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rnovatorov/tcpfanout/pkg/errs"
@@ -64,9 +67,11 @@ func (cli *Client) connect() (net.Conn, error) {
 	var lastErr error
 	var i uint
 	for i = 0; i < cli.ConnectRetries; i++ {
-		// FIXME: Dial with context.
-		conn, lastErr = net.Dial("tcp", cli.ConnectAddr)
+		conn, lastErr = cli.dial()
 		if lastErr != nil {
+			if !cli.shouldRetry(lastErr) {
+				return nil, lastErr
+			}
 			log.Printf("error, %v", lastErr)
 			select {
 			case <-time.After(cli.ConnectIdle):
@@ -82,6 +87,36 @@ func (cli *Client) connect() (net.Conn, error) {
 		return conn, nil
 	}
 	return nil, lastErr
+}
+
+func (cli *Client) dial() (net.Conn, error) {
+	var conn net.Conn
+	var err error
+	ctx, cancel := context.WithCancel(context.TODO())
+	done := make(chan struct{})
+	go func() {
+		var d net.Dialer
+		conn, err = d.DialContext(ctx, "tcp", cli.ConnectAddr)
+		close(done)
+	}()
+	select {
+	case <-done:
+		cancel()
+	case <-cli.stopping:
+		cancel()
+		<-done
+	}
+	return conn, err
+}
+
+func (cli *Client) shouldRetry(err error) bool {
+	if neterr, ok := err.(net.Error); ok && neterr.Temporary() {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	return false
 }
 
 func (cli *Client) handle(conn net.Conn) {
