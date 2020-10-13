@@ -19,7 +19,7 @@ func TestTCPFanout(t *testing.T) {
 func testTCPFanout(t *testing.T) error {
 	data, checksum := generateBytes(65536)
 
-	ups, err := startUpstream(upstreamParams{
+	srv, err := startServer(serverParams{
 		data:                data,
 		bufsize:             8192,
 		acceptTimeout:       10 * time.Second,
@@ -30,14 +30,14 @@ func testTCPFanout(t *testing.T) error {
 		return err
 	}
 	defer func() {
-		if err := ups.stop(); err != nil {
-			log.Printf("error, test: stop upstream: %v", err)
+		if err := srv.stop(); err != nil {
+			log.Printf("error, test: stop server: %v", err)
 			t.Fail()
 		}
 	}()
 
 	tf, err, tferrc := tcpfanout.Start(tcpfanout.Config{
-		ConnectAddr:    ups.addr.String(),
+		ConnectAddr:    srv.addr.String(),
 		ConnectRetries: 60,
 		ConnectIdle:    1 * time.Second,
 		ListenAddr:     "127.0.0.1:0",
@@ -86,7 +86,7 @@ func testTCPFanout(t *testing.T) error {
 	// Waiting for accepted downstream client connections to subscribe to
 	// streaming fanout.
 	time.Sleep(time.Second)
-	close(ups.writable)
+	close(srv.writable)
 
 	return nil
 }

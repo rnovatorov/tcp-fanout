@@ -9,8 +9,8 @@ import (
 	"github.com/rnovatorov/tcpfanout/pkg/errs"
 )
 
-type upstream struct {
-	p        upstreamParams
+type server struct {
+	p        serverParams
 	addr     net.Addr
 	writable chan struct{}
 	errc     chan error
@@ -20,7 +20,7 @@ type upstream struct {
 	stopping chan struct{}
 }
 
-type upstreamParams struct {
+type serverParams struct {
 	data                string
 	bufsize             int
 	acceptTimeout       time.Duration
@@ -28,11 +28,11 @@ type upstreamParams struct {
 	writeTimeout        time.Duration
 }
 
-func startUpstream(p upstreamParams) (*upstream, error) {
+func startServer(p serverParams) (*server, error) {
 	if p.bufsize <= 0 {
 		return nil, fmt.Errorf("expected positive bufsize, got: %v", p.bufsize)
 	}
-	ups := &upstream{
+	srv := &server{
 		p:        p,
 		errc:     make(chan error, 1),
 		writable: make(chan struct{}),
@@ -41,45 +41,45 @@ func startUpstream(p upstreamParams) (*upstream, error) {
 		stopping: make(chan struct{}),
 	}
 	go func() {
-		defer close(ups.stopped)
-		ups.errc <- ups.run()
+		defer close(srv.stopped)
+		srv.errc <- srv.run()
 	}()
 	select {
-	case err := <-ups.errc:
+	case err := <-srv.errc:
 		return nil, err
-	case <-ups.started:
-		return ups, nil
+	case <-srv.started:
+		return srv, nil
 	}
 }
 
-func (ups *upstream) stop() error {
-	ups.once.Do(func() { close(ups.stopping) })
-	<-ups.stopped
-	return <-ups.errc
+func (srv *server) stop() error {
+	srv.once.Do(func() { close(srv.stopping) })
+	<-srv.stopped
+	return <-srv.errc
 }
 
-func (ups *upstream) run() error {
+func (srv *server) run() error {
 	lsn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
 	defer lsn.Close()
 
-	ups.addr = lsn.Addr()
-	close(ups.started)
+	srv.addr = lsn.Addr()
+	close(srv.started)
 
-	conn, err := ups.accept(lsn)
+	conn, err := srv.accept(lsn)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	err = ups.handle(conn)
-	<-ups.stopping
+	err = srv.handle(conn)
+	<-srv.stopping
 	return err
 }
 
-func (ups *upstream) accept(lsn net.Listener) (net.Conn, error) {
+func (srv *server) accept(lsn net.Listener) (net.Conn, error) {
 	var conn net.Conn
 	var err error
 	accepted := make(chan struct{})
@@ -88,33 +88,33 @@ func (ups *upstream) accept(lsn net.Listener) (net.Conn, error) {
 		close(accepted)
 	}()
 	select {
-	case <-ups.stopping:
+	case <-srv.stopping:
 		return nil, errs.Stopping
-	case <-time.After(ups.p.acceptTimeout):
-		return nil, fmt.Errorf("accept: timed out after %v", ups.p.acceptTimeout)
+	case <-time.After(srv.p.acceptTimeout):
+		return nil, fmt.Errorf("accept: timed out after %v", srv.p.acceptTimeout)
 	case <-accepted:
 		return conn, err
 	}
 }
 
-func (ups *upstream) handle(conn net.Conn) error {
+func (srv *server) handle(conn net.Conn) error {
 	select {
-	case <-ups.stopping:
+	case <-srv.stopping:
 		return errs.Stopping
-	case <-time.After(ups.p.waitWritableTimeout):
-		return fmt.Errorf("wait writable: timed out after %v", ups.p.waitWritableTimeout)
-	case <-ups.writable:
-		return ups.write(conn)
+	case <-time.After(srv.p.waitWritableTimeout):
+		return fmt.Errorf("wait writable: timed out after %v", srv.p.waitWritableTimeout)
+	case <-srv.writable:
+		return srv.write(conn)
 	}
 }
 
-func (ups *upstream) write(conn net.Conn) error {
-	data := ups.p.data
+func (srv *server) write(conn net.Conn) error {
+	data := srv.p.data
 	for len(data) > 0 {
-		deadline := time.Now().Add(ups.p.writeTimeout)
+		deadline := time.Now().Add(srv.p.writeTimeout)
 		conn.SetWriteDeadline(deadline)
 
-		size := ups.p.bufsize
+		size := srv.p.bufsize
 		if size > len(data) {
 			size = len(data)
 		}
@@ -124,7 +124,7 @@ func (ups *upstream) write(conn net.Conn) error {
 			return err
 		}
 		if n == 0 {
-			return fmt.Errorf("written 0 bytes: bufsize=%d", ups.p.bufsize)
+			return fmt.Errorf("written 0 bytes: bufsize=%d", srv.p.bufsize)
 		}
 		data = data[n:]
 	}
