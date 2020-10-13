@@ -80,11 +80,11 @@ func (srv *Server) run() error {
 			return err
 		case conn := <-conns:
 			handlers.Add(1)
-			go func() {
+			go func(id int) {
 				defer handlers.Done()
 				defer conn.Close()
 				srv.handle(id, conn)
-			}()
+			}(id)
 		}
 	}
 }
